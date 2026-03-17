@@ -1,0 +1,8 @@
+{
+    "auto_select": true,
+    "min_volume_24h": 1000,
+    "min_liquidity": 5000,
+    "max_end_days": 30,
+    "blacklist": [],
+    "whitelist": []
+}

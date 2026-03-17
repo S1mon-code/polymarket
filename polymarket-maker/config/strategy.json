@@ -1,0 +1,11 @@
+{
+    "num_bands": 3,
+    "band_width": 0.02,
+    "min_spread": 0.03,
+    "max_position_per_market": 500,
+    "max_total_exposure": 5000,
+    "refresh_interval_seconds": 30,
+    "inventory_skew_factor": 0.5,
+    "order_size_base": 50,
+    "order_size_multiplier": [1.0, 1.5, 2.0]
+}
