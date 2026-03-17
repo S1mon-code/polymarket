@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import signal
 import time
@@ -45,6 +44,7 @@ try:
 
     _EXCHANGES_AVAILABLE = True
 except ImportError:
+    BaseExchange = None  # type: ignore[assignment,misc]
     _EXCHANGES_AVAILABLE = False
 
 from src.scanner import FundingScanner, Opportunity
@@ -207,7 +207,7 @@ class FundingArbBot:
     def __init__(self) -> None:
         self.running = False
         self.positions: list[ArbPosition] = []
-        self.exchanges: dict[str, object] = {}
+        self.exchanges: dict[str, BaseExchange] | dict[str, object] = {}
         self.scanner: FundingScanner | None = None
         self.engine: ArbEngine | None = None
         self.executor: TradeExecutor | None = None
@@ -222,11 +222,7 @@ class FundingArbBot:
         # Initialize exchanges
         if _EXCHANGES_AVAILABLE:
             try:
-                config_path = Path(__file__).resolve().parent.parent / "config" / "exchanges.json"
-                with open(config_path) as f:
-                    exchange_config = json.load(f)
-
-                self.exchanges = create_all_exchanges(exchange_config)
+                self.exchanges = create_all_exchanges()
                 logger.info(
                     "Loaded %d exchanges from factory", len(self.exchanges)
                 )
