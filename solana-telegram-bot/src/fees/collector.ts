@@ -18,6 +18,7 @@ import {
 import dotenv from 'dotenv';
 import { getConnection, getRecentBlockhash } from '../data/rpc';
 import { FeeRecord, KNOWN_TOKENS } from '../trading/types';
+import { config } from '../config';
 
 dotenv.config();
 
@@ -69,6 +70,11 @@ export async function collectFee(
   feeAmount: number,
   feeMint: string,
 ): Promise<string> {
+  if (config.dryRun || config.isDevnet) {
+    console.log(`[FeeCollector] ${config.isDevnet ? 'DEVNET' : 'DRY_RUN'} — skipping fee transfer of ${feeAmount} lamports (${feeMint})`);
+    return 'dry_run_no_fee_tx';
+  }
+
   if (!TREASURY_WALLET) {
     throw new Error('TREASURY_WALLET_ADDRESS not set in environment');
   }

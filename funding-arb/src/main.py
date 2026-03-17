@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import signal
 import time
@@ -214,6 +215,7 @@ class FundingArbBot:
         self.monitor: PositionMonitor | None = None
         self.rebalancer: Rebalancer | None = None
         self._last_status_time = 0.0
+        self._start_time = time.time()
 
     async def initialize(self) -> None:
         """Set up all components."""
@@ -260,12 +262,38 @@ class FundingArbBot:
 
         logger.info("Initialization complete — %d exchanges ready", len(self.exchanges))
 
+    def _write_health(self) -> None:
+        """Write health.json for monitoring system."""
+        data_dir = Path("data")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        health = {
+            "bot": "funding-arb",
+            "status": "running" if self.running else "stopped",
+            "uptime_seconds": int(time.time() - self._start_time),
+            "positions": len(self.positions),
+            "total_pnl": sum(p.total_funding_earned + p.realized_pnl for p in self.positions),
+            "dry_run": DRY_RUN,
+            "timestamp": time.time(),
+        }
+        (data_dir / "health.json").write_text(json.dumps(health))
+
+    def _check_kill_signal(self) -> bool:
+        """Check if external kill signal exists."""
+        return Path("data/KILL_SIGNAL").exists()
+
     async def run(self) -> None:
         """Main event loop."""
         self.running = True
         logger.info("Starting main loop (scan every %ds)", SCAN_INTERVAL_SECONDS)
 
         while self.running:
+            # Write health and check kill signal
+            self._write_health()
+            if self._check_kill_signal():
+                logger.warning("Kill signal detected — shutting down")
+                await send_alert("🚨 Funding arb: kill signal detected, shutting down")
+                break
+
             try:
                 await self._cycle()
             except Exception as exc:

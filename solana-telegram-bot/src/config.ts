@@ -9,6 +9,8 @@ export interface Config {
   heliusApiKey: string;
   telegramBotToken: string;
   dryRun: boolean;
+  network: "mainnet" | "devnet";
+  isDevnet: boolean;
 }
 
 function requireEnv(name: string): string {
@@ -20,6 +22,9 @@ function requireEnv(name: string): string {
 }
 
 export function loadConfig(): Config {
+  const network = process.env["SOLANA_NETWORK"] === "devnet" ? "devnet" : "mainnet";
+  const isDevnet = network === "devnet";
+
   return {
     solanaRpcUrl: requireEnv("SOLANA_RPC_URL"),
     solanaPrivateKey: requireEnv("SOLANA_PRIVATE_KEY"),
@@ -27,6 +32,8 @@ export function loadConfig(): Config {
     heliusApiKey: requireEnv("HELIUS_API_KEY"),
     telegramBotToken: requireEnv("TELEGRAM_BOT_TOKEN"),
     dryRun: process.env["DRY_RUN"] === "true",
+    network,
+    isDevnet,
   };
 }
 

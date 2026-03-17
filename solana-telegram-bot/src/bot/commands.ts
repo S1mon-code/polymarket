@@ -20,6 +20,15 @@ import {
   FEE_RATE,
   ADMIN_USER_IDS,
 } from '../types';
+import { config } from '../config';
+
+// ── Mode badge for messages ──────────────────────────────────────────
+function modeBadge(): string {
+  const parts: string[] = [];
+  if (config.dryRun) parts.push('[DRY RUN]');
+  if (config.isDevnet) parts.push('\u{1F9EA} DEVNET');
+  return parts.length > 0 ? parts.join(' ') + '\n' : '';
+}
 
 // ── In-memory settings store ─────────────────────────────────────────
 const userSettings = new Map<string, UserSettings>();
@@ -55,7 +64,7 @@ export async function startCommand(ctx: Context) {
 
   await ctx.reply(
     [
-      '🚀 <b>Welcome to Solana Trading Bot!</b>',
+      modeBadge() + '🚀 <b>Welcome to Solana Trading Bot!</b>',
       '',
       walletMsg,
       '',
@@ -241,7 +250,7 @@ export async function buyCommand(ctx: Context) {
   const confirmation = confirmSwapMenu('buy', token, amount, quote);
 
   await ctx.reply(
-    [safetyReport, '', '─'.repeat(30), '', confirmation.text].join('\n'),
+    [modeBadge() + safetyReport, '', '─'.repeat(30), '', confirmation.text].join('\n'),
     { parse_mode: 'HTML', ...confirmation.keyboard }
   );
 }
@@ -304,7 +313,7 @@ export async function sellCommand(ctx: Context) {
 
   const confirmation = confirmSwapMenu('sell', token, amount, quote);
 
-  await ctx.reply(confirmation.text, {
+  await ctx.reply(modeBadge() + confirmation.text, {
     parse_mode: 'HTML',
     ...confirmation.keyboard,
   });

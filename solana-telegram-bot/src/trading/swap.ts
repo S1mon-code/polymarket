@@ -8,10 +8,12 @@ import dotenv from 'dotenv';
 import { getQuote, executeSwap, simulateSwap } from './jupiter';
 import { calculateFee, splitFeeAndSwap, collectFee } from '../fees/collector';
 import { SwapResult, KNOWN_TOKENS } from './types';
+import { config } from '../config';
 
 dotenv.config();
 
-const DRY_RUN = process.env.DRY_RUN === 'true';
+const DRY_RUN = config.dryRun;
+const IS_DEVNET = config.isDevnet;
 
 /**
  * Buy a token with SOL.
@@ -36,7 +38,8 @@ export async function buyToken(
     console.log(`[Swap] BUY: ${solAmount} lamports SOL → ${tokenMint}`);
     console.log(`[Swap]   Fee: ${feeAmount} lamports | Swap: ${swapAmount} lamports`);
 
-    if (DRY_RUN) {
+    if (DRY_RUN || IS_DEVNET) {
+      console.log(`[Swap] ${IS_DEVNET ? 'DEVNET' : 'DRY_RUN'} mode — simulating only`);
       return await dryRunSwap(
         KNOWN_TOKENS.SOL,
         tokenMint,
@@ -102,7 +105,8 @@ export async function sellToken(
     console.log(`[Swap] SELL: ${tokenAmount} ${tokenMint} → SOL`);
     console.log(`[Swap]   Fee: ${feeAmount} tokens | Swap: ${swapAmount} tokens`);
 
-    if (DRY_RUN) {
+    if (DRY_RUN || IS_DEVNET) {
+      console.log(`[Swap] ${IS_DEVNET ? 'DEVNET' : 'DRY_RUN'} mode — simulating only`);
       return await dryRunSwap(
         tokenMint,
         KNOWN_TOKENS.SOL,
@@ -152,7 +156,7 @@ async function dryRunSwap(
   slippageBps: number,
   feeAmount: number,
 ): Promise<SwapResult> {
-  console.log('[Swap] DRY_RUN mode — simulating only');
+  const label = IS_DEVNET ? 'DEVNET' : 'DRY_RUN';
 
   const quote = await simulateSwap(inputMint, outputMint, swapAmount, slippageBps);
 
@@ -162,6 +166,6 @@ async function dryRunSwap(
     amountIn: swapAmount,
     amountOut: parseInt(quote.outAmount, 10),
     feeAmount,
-    error: 'DRY_RUN — no transaction sent',
+    error: `${label} — no transaction sent`,
   };
 }

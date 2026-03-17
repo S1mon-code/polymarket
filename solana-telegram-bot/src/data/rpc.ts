@@ -4,11 +4,18 @@
 
 import { Connection, Commitment } from '@solana/web3.js';
 import dotenv from 'dotenv';
+import { config } from '../config';
 
 dotenv.config();
 
-const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL || 'https://api.mainnet-beta.solana.com';
-const FALLBACK_RPC_URL = process.env.FALLBACK_RPC_URL || 'https://api.mainnet-beta.solana.com';
+const DEVNET_RPC_URL = 'https://api.devnet.solana.com';
+
+const HELIUS_RPC_URL = config.isDevnet
+  ? DEVNET_RPC_URL
+  : (process.env.HELIUS_RPC_URL || 'https://api.mainnet-beta.solana.com');
+const FALLBACK_RPC_URL = config.isDevnet
+  ? DEVNET_RPC_URL
+  : (process.env.FALLBACK_RPC_URL || 'https://api.mainnet-beta.solana.com');
 const BLOCKHASH_CACHE_TTL_MS = 30_000; // 30 seconds
 
 interface BlockhashCache {

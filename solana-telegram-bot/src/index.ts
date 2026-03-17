@@ -15,6 +15,7 @@ import {
 import { registerCallbacks } from './bot/callbacks';
 import { rateLimiter, userTracker, errorHandler } from './bot/middleware';
 import { getDb, closeDb } from './db/sqlite';
+import { config } from './config';
 
 dotenv.config();
 
@@ -27,6 +28,29 @@ if (!fs.existsSync(dataDir)) {
 // ── Initialize database ──────────────────────────────────────────────
 console.log('📦 Initializing database...');
 getDb();
+
+// ── Health check writer ───────────────────────────────────────────────
+const startedAt = Date.now();
+let lastTradeTimestamp: number | null = null;
+
+function writeHealthFile(): void {
+  const health = {
+    bot: 'solana-bot',
+    status: 'running',
+    uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
+    last_trade: lastTradeTimestamp,
+    dry_run: config.dryRun,
+    network: config.network,
+  };
+  try {
+    fs.writeFileSync(
+      path.join(dataDir, 'health.json'),
+      JSON.stringify(health, null, 2),
+    );
+  } catch (err) {
+    console.error('[Health] Failed to write health file:', err);
+  }
+}
 
 // ── Validate env ──────────────────────────────────────────────────────
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -80,6 +104,13 @@ console.log('🚀 Starting Solana Trading Bot...');
 bot.launch()
   .then(() => {
     console.log('✅ Bot is running! Waiting for messages...');
+    if (config.dryRun) console.log('📋 DRY_RUN mode is ON — no real transactions will be sent');
+    if (config.isDevnet) console.log('🧪 DEVNET mode is ON — using devnet RPC');
+
+    // Write initial health file and start periodic updates
+    writeHealthFile();
+    const healthInterval = setInterval(writeHealthFile, 60_000);
+    healthInterval.unref();
   })
   .catch((err) => {
     console.error('❌ Failed to start bot:', err);

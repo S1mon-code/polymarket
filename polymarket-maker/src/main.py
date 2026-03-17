@@ -6,6 +6,7 @@ import asyncio
 import json
 import signal
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -98,6 +99,7 @@ class MarketMakerBot:
     def __init__(self) -> None:
         self._running = False
         self._shutdown_event = asyncio.Event()
+        self._start_time = time.time()
 
         # Core components
         self.client = PolymarketClient()
@@ -375,6 +377,26 @@ class MarketMakerBot:
             except asyncio.TimeoutError:
                 pass  # Normal: timeout means time for next cycle
 
+    def _write_health(self) -> None:
+        """Write health.json for monitoring system."""
+        data_dir = Path("data")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        health = {
+            "bot": "poly-maker",
+            "status": "running" if self._running else "stopped",
+            "uptime_seconds": int(time.time() - self._start_time),
+            "pnl": self.risk.get_daily_pnl(),
+            "open_orders": len(self._open_order_ids),
+            "active_markets": len(self._active_markets),
+            "dry_run": config.DRY_RUN,
+            "timestamp": time.time(),
+        }
+        (data_dir / "health.json").write_text(json.dumps(health))
+
+    def _check_kill_signal(self) -> bool:
+        """Check if external kill signal exists."""
+        return Path("data/KILL_SIGNAL").exists()
+
     async def _health_loop(self) -> None:
         """Periodic health check and Telegram reporting."""
         while self._running and not self._shutdown_event.is_set():
@@ -387,6 +409,15 @@ class MarketMakerBot:
                 pass  # Normal timeout — time to check health
 
             if not self._running:
+                break
+
+            # Write health file and check kill signal
+            self._write_health()
+            if self._check_kill_signal():
+                logger.warning("Kill signal detected — shutting down")
+                await self.risk.kill_switch(self.client, "External kill signal")
+                self._running = False
+                self._shutdown_event.set()
                 break
 
             try:

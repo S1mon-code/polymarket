@@ -8,6 +8,14 @@ import { getConnection } from '../data/rpc';
 import { getWallet, getKeypair, getBalance, exportPrivateKey } from '../wallet/manager';
 import { buyToken, sellToken } from '../trading/swap';
 import { insertTransaction } from '../db/sqlite';
+import { config } from '../config';
+
+function modeBadge(): string {
+  const parts: string[] = [];
+  if (config.dryRun) parts.push('[DRY RUN]');
+  if (config.isDevnet) parts.push('\u{1F9EA} DEVNET');
+  return parts.length > 0 ? parts.join(' ') + '\n' : '';
+}
 
 function getSettings(userId: string): UserSettings {
   return userSettings.get(userId) ?? { ...DEFAULT_SETTINGS };
@@ -37,7 +45,7 @@ export function registerCallbacks(bot: {
     try {
       await ctx.editMessageText(
         [
-          '⏳ <b>Executing Buy Order</b>',
+          modeBadge() + '⏳ <b>Executing Buy Order</b>',
           '',
           `Token: <code>${token}</code>`,
           `Amount: <b>${amount} SOL</b>`,
@@ -73,7 +81,7 @@ export function registerCallbacks(bot: {
       if (result.success) {
         await ctx.editMessageText(
           [
-            '✅ <b>Buy Order Confirmed!</b>',
+            modeBadge() + '✅ <b>Buy Order Confirmed!</b>',
             '',
             `Token: <code>${token}</code>`,
             `Spent: <b>${(result.amountIn / LAMPORTS_PER_SOL).toFixed(6)} SOL</b>`,
@@ -126,7 +134,7 @@ export function registerCallbacks(bot: {
     try {
       await ctx.editMessageText(
         [
-          '⏳ <b>Executing Sell Order</b>',
+          modeBadge() + '⏳ <b>Executing Sell Order</b>',
           '',
           `Token: <code>${token}</code>`,
           `Amount: <b>${amount}</b>`,
@@ -158,7 +166,7 @@ export function registerCallbacks(bot: {
       if (result.success) {
         await ctx.editMessageText(
           [
-            '✅ <b>Sell Order Confirmed!</b>',
+            modeBadge() + '✅ <b>Sell Order Confirmed!</b>',
             '',
             `Token: <code>${token}</code>`,
             `Sold: <b>${result.amountIn}</b> tokens`,
