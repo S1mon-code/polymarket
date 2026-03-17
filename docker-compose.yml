@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  solana-telegram-bot:
+    build: ./solana-telegram-bot
+    container_name: solana-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+
+  polymarket-maker:
+    build: ./polymarket-maker
+    container_name: poly-maker
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+
+  funding-arb:
+    build: ./funding-arb
+    container_name: funding-arb
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+
+  monitor:
+    build:
+      context: .
+      dockerfile: monitoring/Dockerfile
+    container_name: monitor
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
