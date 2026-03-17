@@ -1,0 +1,11 @@
+{
+    "exchanges": {
+        "binance": {"enabled": true, "max_leverage": 3, "allocation_pct": 30},
+        "bybit": {"enabled": true, "max_leverage": 3, "allocation_pct": 30},
+        "hyperliquid": {"enabled": true, "max_leverage": 2, "allocation_pct": 20},
+        "dydx": {"enabled": true, "max_leverage": 2, "allocation_pct": 20}
+    },
+    "default_leverage": 1,
+    "max_leverage": 3,
+    "testnet": true
+}
