@@ -1,5 +1,7 @@
 import { Telegraf } from 'telegraf';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
 import {
   startCommand,
   helpCommand,
@@ -12,8 +14,19 @@ import {
 } from './bot/commands';
 import { registerCallbacks } from './bot/callbacks';
 import { rateLimiter, userTracker, errorHandler } from './bot/middleware';
+import { getDb, closeDb } from './db/sqlite';
 
 dotenv.config();
+
+// ── Ensure data directory exists for SQLite ──────────────────────────
+const dataDir = path.resolve(process.cwd(), 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
+// ── Initialize database ──────────────────────────────────────────────
+console.log('📦 Initializing database...');
+getDb();
 
 // ── Validate env ──────────────────────────────────────────────────────
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -55,6 +68,7 @@ bot.on('text', async (ctx) => {
 const shutdown = (signal: string) => {
   console.log(`\n🛑 Received ${signal}. Shutting down gracefully...`);
   bot.stop(signal);
+  closeDb();
   process.exit(0);
 };
 
@@ -69,5 +83,6 @@ bot.launch()
   })
   .catch((err) => {
     console.error('❌ Failed to start bot:', err);
+    closeDb();
     process.exit(1);
   });

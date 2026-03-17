@@ -1,7 +1,6 @@
-import { Connection, PublicKey } from '@solana/web3.js';
+import { PublicKey } from '@solana/web3.js';
 import { SafetyScore } from '../types';
-
-const RPC_URL = process.env.SOLANA_RPC_URL ?? 'https://api.mainnet-beta.solana.com';
+import { getConnection } from '../data/rpc';
 
 /**
  * Run anti-rug safety checks on a token before buying.
@@ -13,7 +12,7 @@ const RPC_URL = process.env.SOLANA_RPC_URL ?? 'https://api.mainnet-beta.solana.c
  * 4. Top-holder concentration
  */
 export async function checkToken(mintAddress: string): Promise<SafetyScore> {
-  const connection = new Connection(RPC_URL, 'confirmed');
+  const connection = getConnection();
   const warnings: string[] = [];
   let score = 100;
 

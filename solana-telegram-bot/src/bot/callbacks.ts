@@ -1,11 +1,13 @@
 import { Context, Markup } from 'telegraf';
-import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { mainMenu, settingsMenu } from './menus';
-import { userWallets, userSettings, feeCollected } from './commands';
+import { userSettings } from './commands';
 import { recordTrade } from '../safety/risk_limits';
 import { DEFAULT_SETTINGS, FEE_RATE, UserSettings } from '../types';
-
-const RPC_URL = process.env.SOLANA_RPC_URL ?? 'https://api.mainnet-beta.solana.com';
+import { getConnection } from '../data/rpc';
+import { getWallet, getKeypair, getBalance, exportPrivateKey } from '../wallet/manager';
+import { buyToken, sellToken } from '../trading/swap';
+import { insertTransaction } from '../db/sqlite';
 
 function getSettings(userId: string): UserSettings {
   return userSettings.get(userId) ?? { ...DEFAULT_SETTINGS };
@@ -46,29 +48,57 @@ export function registerCallbacks(bot: {
         { parse_mode: 'HTML' }
       );
 
-      // In production, this calls the trading module's executeBuy()
-      // For now, record the trade and report success placeholder
-      recordTrade(userId, amount);
-      feeCollected.totalSol += amount * FEE_RATE;
+      // Get user's keypair and execute the swap
+      const keypair = getKeypair(userId);
+      const settings = getSettings(userId);
+      const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
 
-      await ctx.editMessageText(
-        [
-          '✅ <b>Buy Order Submitted</b>',
-          '',
-          `Token: <code>${token}</code>`,
-          `Amount: <b>${amount} SOL</b>`,
-          `Fee: <b>${(amount * FEE_RATE).toFixed(6)} SOL</b>`,
-          '',
-          '⏳ Waiting for confirmation...',
-          '(The trading module will handle the actual swap)',
-        ].join('\n'),
-        {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('⬅️ Main Menu', 'menu_main')],
-          ]),
-        }
-      );
+      const result = await buyToken(keypair, token, lamports, settings.slippageBps);
+
+      // Record the trade for risk limits
+      recordTrade(userId, amount);
+
+      // Store transaction in DB
+      insertTransaction({
+        telegram_user_id: userId,
+        type: 'buy',
+        token_mint: token,
+        amount_in: result.amountIn,
+        amount_out: result.amountOut,
+        fee_amount: result.feeAmount,
+        tx_hash: result.txHash ?? 'dry_run',
+        status: result.success ? 'confirmed' : 'failed',
+      });
+
+      if (result.success) {
+        await ctx.editMessageText(
+          [
+            '✅ <b>Buy Order Confirmed!</b>',
+            '',
+            `Token: <code>${token}</code>`,
+            `Spent: <b>${(result.amountIn / LAMPORTS_PER_SOL).toFixed(6)} SOL</b>`,
+            `Received: <b>${result.amountOut}</b> tokens`,
+            `Fee: <b>${(result.feeAmount / LAMPORTS_PER_SOL).toFixed(6)} SOL</b>`,
+            result.txHash ? `\nTX: <code>${result.txHash}</code>` : '',
+          ].join('\n'),
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('⬅️ Main Menu', 'menu_main')],
+            ]),
+          }
+        );
+      } else {
+        await ctx.editMessageText(
+          `❌ <b>Buy failed:</b> <code>${result.error ?? 'Unknown error'}</code>`,
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('⬅️ Main Menu', 'menu_main')],
+            ]),
+          }
+        );
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       await ctx.editMessageText(
@@ -106,25 +136,54 @@ export function registerCallbacks(bot: {
         { parse_mode: 'HTML' }
       );
 
-      // Placeholder for trading module integration
-      feeCollected.totalSol += amount * FEE_RATE;
+      // Get user's keypair and execute the swap
+      const keypair = getKeypair(userId);
+      const settings = getSettings(userId);
+      const tokenAmount = Math.floor(amount); // smallest unit
 
-      await ctx.editMessageText(
-        [
-          '✅ <b>Sell Order Submitted</b>',
-          '',
-          `Token: <code>${token}</code>`,
-          `Amount: <b>${amount}</b>`,
-          '',
-          '⏳ Waiting for confirmation...',
-        ].join('\n'),
-        {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('⬅️ Main Menu', 'menu_main')],
-          ]),
-        }
-      );
+      const result = await sellToken(keypair, token, tokenAmount, settings.slippageBps);
+
+      // Store transaction in DB
+      insertTransaction({
+        telegram_user_id: userId,
+        type: 'sell',
+        token_mint: token,
+        amount_in: result.amountIn,
+        amount_out: result.amountOut,
+        fee_amount: result.feeAmount,
+        tx_hash: result.txHash ?? 'dry_run',
+        status: result.success ? 'confirmed' : 'failed',
+      });
+
+      if (result.success) {
+        await ctx.editMessageText(
+          [
+            '✅ <b>Sell Order Confirmed!</b>',
+            '',
+            `Token: <code>${token}</code>`,
+            `Sold: <b>${result.amountIn}</b> tokens`,
+            `Received: <b>${(result.amountOut / LAMPORTS_PER_SOL).toFixed(6)} SOL</b>`,
+            `Fee: <b>${result.feeAmount}</b> tokens`,
+            result.txHash ? `\nTX: <code>${result.txHash}</code>` : '',
+          ].join('\n'),
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('⬅️ Main Menu', 'menu_main')],
+            ]),
+          }
+        );
+      } else {
+        await ctx.editMessageText(
+          `❌ <b>Sell failed:</b> <code>${result.error ?? 'Unknown error'}</code>`,
+          {
+            parse_mode: 'HTML',
+            ...Markup.inlineKeyboard([
+              [Markup.button.callback('⬅️ Main Menu', 'menu_main')],
+            ]),
+          }
+        );
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       await ctx.editMessageText(
@@ -152,8 +211,10 @@ export function registerCallbacks(bot: {
 
     await ctx.answerCbQuery('Refreshing...');
 
-    const address = userWallets.get(userId);
-    if (!address) {
+    let wallet;
+    try {
+      wallet = getWallet(userId);
+    } catch {
       await ctx.editMessageText(
         '👛 No wallet found. Use /start to create one.',
         { parse_mode: 'HTML' }
@@ -162,17 +223,15 @@ export function registerCallbacks(bot: {
     }
 
     try {
-      const connection = new Connection(RPC_URL, 'confirmed');
-      const pubkey = new PublicKey(address);
-      const balanceLamports = await connection.getBalance(pubkey);
-      const balanceSol = balanceLamports / LAMPORTS_PER_SOL;
+      const connection = getConnection();
+      const balanceSol = await getBalance(connection, wallet.publicKey);
 
       await ctx.editMessageText(
         [
           '👛 <b>Your Wallet</b>',
           '',
-          `Address: <code>${address}</code>`,
-          `SOL Balance: <b>${balanceSol.toFixed(6)} SOL</b>`,
+          `Address: <code>${wallet.publicKey}</code>`,
+          `SOL Balance: <b>${balanceSol} SOL</b>`,
           '',
           `🔄 Updated: ${new Date().toLocaleTimeString()}`,
         ].join('\n'),
@@ -271,12 +330,13 @@ export function registerCallbacks(bot: {
 
   bot.action('menu_wallet', async (ctx: Context) => {
     await ctx.answerCbQuery();
-    // Redirect to the /wallet command behavior
     const userId = ctx.from?.id?.toString();
     if (!userId) return;
 
-    const address = userWallets.get(userId);
-    if (!address) {
+    let wallet;
+    try {
+      wallet = getWallet(userId);
+    } catch {
       await ctx.editMessageText(
         '👛 No wallet found. Use /start to create one.',
         { parse_mode: 'HTML' }
@@ -285,17 +345,15 @@ export function registerCallbacks(bot: {
     }
 
     try {
-      const connection = new Connection(RPC_URL, 'confirmed');
-      const pubkey = new PublicKey(address);
-      const balanceLamports = await connection.getBalance(pubkey);
-      const balanceSol = balanceLamports / LAMPORTS_PER_SOL;
+      const connection = getConnection();
+      const balanceSol = await getBalance(connection, wallet.publicKey);
 
       await ctx.editMessageText(
         [
           '👛 <b>Your Wallet</b>',
           '',
-          `Address: <code>${address}</code>`,
-          `SOL Balance: <b>${balanceSol.toFixed(6)} SOL</b>`,
+          `Address: <code>${wallet.publicKey}</code>`,
+          `SOL Balance: <b>${balanceSol} SOL</b>`,
         ].join('\n'),
         {
           parse_mode: 'HTML',
@@ -338,22 +396,35 @@ export function registerCallbacks(bot: {
 
     await ctx.answerCbQuery();
 
-    // In production, retrieve the actual private key from the wallet module
-    await ctx.editMessageText(
-      [
-        '🔐 <b>Private Key Export</b>',
-        '',
-        '⚠️ The wallet module will provide the actual private key.',
-        '⚠️ <b>Delete this message immediately after saving your key!</b>',
-        '',
-        '<i>(Wallet module integration pending)</i>',
-      ].join('\n'),
-      {
-        parse_mode: 'HTML',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback('⬅️ Main Menu', 'menu_main')],
-        ]),
-      }
-    );
+    try {
+      const privateKey = exportPrivateKey(userId);
+
+      await ctx.editMessageText(
+        [
+          '🔐 <b>Private Key Export</b>',
+          '',
+          `<code>${privateKey}</code>`,
+          '',
+          '⚠️ <b>Delete this message immediately after saving your key!</b>',
+        ].join('\n'),
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ Main Menu', 'menu_main')],
+          ]),
+        }
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      await ctx.editMessageText(
+        `❌ <b>Export failed:</b> <code>${msg}</code>`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ Main Menu', 'menu_main')],
+          ]),
+        }
+      );
+    }
   });
 }

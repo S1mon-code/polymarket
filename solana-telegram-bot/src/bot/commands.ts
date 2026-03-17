@@ -1,10 +1,19 @@
 import { Context, Markup } from 'telegraf';
-import { PublicKey, Connection, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { mainMenu, confirmSwapMenu, settingsMenu } from './menus';
 import { checkToken, formatSafetyReport } from '../safety/anti_rug';
-import { checkTradeLimit, formatLimitsInfo } from '../safety/risk_limits';
+import { checkTradeLimit } from '../safety/risk_limits';
+import { getConnection } from '../data/rpc';
+import { getQuote } from '../trading/jupiter';
+import { KNOWN_TOKENS } from '../trading/types';
+import { getTotalFees, getDailyRevenue } from '../fees/stats';
 import {
-  BotContext,
+  createWallet,
+  getWallet,
+  getBalance,
+} from '../wallet/manager';
+import { getTokenBalances } from '../wallet/balance';
+import {
   DEFAULT_SETTINGS,
   UserSettings,
   SwapQuote,
@@ -12,12 +21,8 @@ import {
   ADMIN_USER_IDS,
 } from '../types';
 
-// ── In-memory stores (to be replaced with DB in production) ───────────
-const userWallets = new Map<string, string>();   // tgUserId → walletAddress
+// ── In-memory settings store ─────────────────────────────────────────
 const userSettings = new Map<string, UserSettings>();
-const feeCollected = { totalSol: 0 };
-
-const RPC_URL = process.env.SOLANA_RPC_URL ?? 'https://api.mainnet-beta.solana.com';
 
 function getSettings(userId: string): UserSettings {
   return userSettings.get(userId) ?? { ...DEFAULT_SETTINGS };
@@ -29,12 +34,23 @@ export async function startCommand(ctx: Context) {
   if (!userId) return;
 
   let walletMsg: string;
-  if (userWallets.has(userId)) {
-    walletMsg = `Your wallet: <code>${userWallets.get(userId)}</code>`;
-  } else {
-    // In production, the wallet module creates a real Keypair.
-    // Here we store a placeholder to signal "user registered".
-    walletMsg = '🔑 A new wallet will be generated for you on first trade.';
+  try {
+    const wallet = getWallet(userId);
+    walletMsg = `Your wallet: <code>${wallet.publicKey}</code>`;
+  } catch {
+    // No wallet yet — create one
+    try {
+      const publicKey = createWallet(userId);
+      walletMsg = `🔑 New wallet created!\n\nYour address: <code>${publicKey}</code>`;
+    } catch (err) {
+      // Wallet already exists (race condition) — retrieve it
+      try {
+        const wallet = getWallet(userId);
+        walletMsg = `Your wallet: <code>${wallet.publicKey}</code>`;
+      } catch {
+        walletMsg = '❌ Failed to create wallet. Please try again.';
+      }
+    }
   }
 
   await ctx.reply(
@@ -83,8 +99,10 @@ export async function walletCommand(ctx: Context) {
   const userId = ctx.from?.id?.toString();
   if (!userId) return;
 
-  const address = userWallets.get(userId);
-  if (!address) {
+  let wallet;
+  try {
+    wallet = getWallet(userId);
+  } catch {
     await ctx.reply(
       '👛 You don\'t have a wallet yet. Use /start to create one.',
       { parse_mode: 'HTML' }
@@ -93,17 +111,28 @@ export async function walletCommand(ctx: Context) {
   }
 
   try {
-    const connection = new Connection(RPC_URL, 'confirmed');
-    const pubkey = new PublicKey(address);
-    const balanceLamports = await connection.getBalance(pubkey);
-    const balanceSol = balanceLamports / LAMPORTS_PER_SOL;
+    const connection = getConnection();
+    const balanceSol = await getBalance(connection, wallet.publicKey);
+
+    // Fetch token balances
+    const pubkey = new PublicKey(wallet.publicKey);
+    const tokenBalances = await getTokenBalances(connection, pubkey);
+
+    const tokenLines = tokenBalances.length > 0
+      ? tokenBalances.slice(0, 10).map(
+          (t) => `  • <code>${t.mint.slice(0, 8)}...</code> — ${t.uiAmount.toFixed(4)}`
+        )
+      : ['  No tokens found'];
 
     await ctx.reply(
       [
         '👛 <b>Your Wallet</b>',
         '',
-        `Address: <code>${address}</code>`,
-        `SOL Balance: <b>${balanceSol.toFixed(6)} SOL</b>`,
+        `Address: <code>${wallet.publicKey}</code>`,
+        `SOL Balance: <b>${balanceSol} SOL</b>`,
+        '',
+        '<b>Token Balances:</b>',
+        ...tokenLines,
         '',
         '💡 Send SOL to this address to start trading.',
       ].join('\n'),
@@ -127,6 +156,16 @@ export async function walletCommand(ctx: Context) {
 export async function buyCommand(ctx: Context) {
   const userId = ctx.from?.id?.toString();
   if (!userId) return;
+
+  // Ensure user has a wallet
+  try {
+    getWallet(userId);
+  } catch {
+    await ctx.reply('👛 You don\'t have a wallet yet. Use /start to create one.', {
+      parse_mode: 'HTML',
+    });
+    return;
+  }
 
   const text =
     ctx.message && 'text' in ctx.message ? ctx.message.text : '';
@@ -174,14 +213,28 @@ export async function buyCommand(ctx: Context) {
   const safety = await checkToken(token);
   const safetyReport = formatSafetyReport(safety);
 
-  // Build a mock quote (in production, this comes from Jupiter API)
+  // Get a real quote from Jupiter for display
   const fee = amount * FEE_RATE;
+  const netLamports = Math.floor((amount - fee) * LAMPORTS_PER_SOL);
+
+  let expectedOutput = 0;
+  let priceImpact = 0;
+  const settings = getSettings(userId);
+
+  try {
+    const jupQuote = await getQuote(KNOWN_TOKENS.SOL, token, netLamports, settings.slippageBps);
+    expectedOutput = parseInt(jupQuote.outAmount, 10);
+    priceImpact = parseFloat(jupQuote.priceImpactPct);
+  } catch {
+    // Quote failed — show zero and let user decide
+  }
+
   const quote: SwapQuote = {
     inputToken: 'SOL',
     outputToken: token,
     inputAmount: amount,
-    expectedOutput: 0, // filled by trading module
-    priceImpact: 0,
+    expectedOutput,
+    priceImpact,
     fee,
   };
 
@@ -197,6 +250,16 @@ export async function buyCommand(ctx: Context) {
 export async function sellCommand(ctx: Context) {
   const userId = ctx.from?.id?.toString();
   if (!userId) return;
+
+  // Ensure user has a wallet
+  try {
+    getWallet(userId);
+  } catch {
+    await ctx.reply('👛 You don\'t have a wallet yet. Use /start to create one.', {
+      parse_mode: 'HTML',
+    });
+    return;
+  }
 
   const text =
     ctx.message && 'text' in ctx.message ? ctx.message.text : '';
@@ -252,7 +315,9 @@ export async function exportCommand(ctx: Context) {
   const userId = ctx.from?.id?.toString();
   if (!userId) return;
 
-  if (!userWallets.has(userId)) {
+  try {
+    getWallet(userId);
+  } catch {
     await ctx.reply('❌ No wallet found. Use /start first.', {
       parse_mode: 'HTML',
     });
@@ -309,16 +374,34 @@ export async function revenueCommand(ctx: Context) {
     return;
   }
 
-  await ctx.reply(
-    [
-      '💰 <b>Revenue Dashboard</b>',
-      '',
-      `Total fees collected: <b>${feeCollected.totalSol.toFixed(6)} SOL</b>`,
-      `Fee rate: <b>${(FEE_RATE * 100).toFixed(0)}%</b>`,
-    ].join('\n'),
-    { parse_mode: 'HTML' }
-  );
+  try {
+    const totalAll = await getTotalFees();
+    const totalDay = await getTotalFees('day');
+    const totalWeek = await getTotalFees('week');
+    const dailyRev = await getDailyRevenue(7);
+
+    const dailyLines = dailyRev.map(
+      (d) => `  ${d.date}: ${(d.totalFeeLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL (${d.txCount} txs)`
+    );
+
+    await ctx.reply(
+      [
+        '💰 <b>Revenue Dashboard</b>',
+        '',
+        `All-time fees: <b>${(totalAll / LAMPORTS_PER_SOL).toFixed(6)} SOL</b>`,
+        `Last 24h: <b>${(totalDay / LAMPORTS_PER_SOL).toFixed(6)} SOL</b>`,
+        `Last 7d: <b>${(totalWeek / LAMPORTS_PER_SOL).toFixed(6)} SOL</b>`,
+        `Fee rate: <b>${(FEE_RATE * 100).toFixed(0)}%</b>`,
+        '',
+        '<b>Daily Breakdown (last 7 days):</b>',
+        ...(dailyLines.length > 0 ? dailyLines : ['  No revenue yet']),
+      ].join('\n'),
+      { parse_mode: 'HTML' }
+    );
+  } catch (err) {
+    await ctx.reply('❌ Failed to load revenue data.', { parse_mode: 'HTML' });
+  }
 }
 
 // ── Exported stores (for use by callbacks) ────────────────────────────
-export { userWallets, userSettings, feeCollected };
+export { userSettings };
